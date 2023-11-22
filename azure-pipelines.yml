@@ -1,0 +1,79 @@
+trigger:
+- main
+
+pool:
+  vmImage: 'windows-latest'
+
+name: 0.0$(Rev:.r)
+
+resources:
+  repositories:
+  - repository: templates
+    type: git 
+    name: SoftwareTransformation/DevOps
+    ref: refs/heads/master
+  - repository: accessDevOps
+    type: github
+    name: Alaska-ECommerce/AccessManagementDevOps
+    endpoint: Alaska-ECommerce-E_Retain_Account
+    ref: refs/heads/main
+
+stages:
+- stage: Build
+  variables:
+    - name: TeamName
+      value: access
+    - name: AppName
+      value: NuGet-GraphQlValidation
+    - name: LibraryProjects
+      value: "**/AlaskaAir.Utilities.GraphQlValidation.csproj"
+    - name: TestProjects
+      value: "**/*.Tests.csproj"
+    - name: BuildConfiguration
+      value: release
+    - name: BuildPlatform
+      value: any cpu
+    - name: VersionNumber
+      ${{ if eq(variables['Build.SourceBranchName'], 'main') }}:
+        value: $(Build.BuildNumber)
+      ${{ if ne(variables['Build.SourceBranchName'], 'main') }}:
+        value: $(Build.BuildNumber)-beta
+  jobs:
+  - template: SonarQube/dotnet.yml@accessDevOps
+    parameters:
+      SonarQubeProjectNamePrefix: ecomm
+      TeamName: $(TeamName)
+      AppName: $(AppName)
+      BuildProjects: |
+        $(LibraryProjects)
+        $(TestProjects)
+      TestProjects: |
+        $(TestProjects)
+      AdditionalTasks:
+      - task: DotNetCoreCLI@2
+        displayName: Pack
+        inputs:
+          command: custom
+          projects: '$(LibraryProjects)'
+          custom: pack
+          arguments: '--no-build -c $(BuildConfiguration) -p:PackageVersion=$(VersionNumber) -o $(build.artifactstagingdirectory)'
+      - task: PublishBuildArtifacts@1
+        displayName: 'Publish Artifact'
+        inputs:
+          PathtoPublish: '$(build.artifactstagingdirectory)'
+
+- stage: ASInternal
+  condition: succeeded()
+  jobs:
+  - deployment: ASInternal
+    environment: NuGet-ASInternal
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: DotNetCoreCLI@2
+            displayName: 'Push to ASInternal'
+            inputs:
+              command: push
+              packagesToPush: '$(Pipeline.Workspace)/drop/*.nupkg'
+              publishVstsFeed: 'c005f067-8dd6-49a9-a11f-6ac99ea93a22'
